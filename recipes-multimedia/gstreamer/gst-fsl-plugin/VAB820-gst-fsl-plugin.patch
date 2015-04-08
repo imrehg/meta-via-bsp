@@ -1,0 +1,459 @@
+diff --git a/src/misc/v4l_sink/src/mfw_gst_fb.c b/src/misc/v4l_sink/src/mfw_gst_fb.c
+index 4600904..c1c81b2 100755
+--- a/src/misc/v4l_sink/src/mfw_gst_fb.c
++++ b/src/misc/v4l_sink/src/mfw_gst_fb.c
+@@ -204,9 +204,16 @@ gboolean mfw_gst_fb0_open(gint *fb)
+ {
+     gboolean retval = TRUE;
+     gchar fb_device[100] = FB_DEIVCE;
+-
+-	if ((*fb =
+-	     open(fb_device, O_RDWR, 0)) < 0) {
++    static gint gbl_fd_fb0 = -1;
++
++    // Only open if the global fd is closed - Add by Dylan
++    if (fcntl(gbl_fd_fb0,F_GETFL) == -1){     
++        *fb = open (fb_device, O_RDWR,0);
++        gbl_fd_fb0 = *fb;
++    } else{
++        *fb = gbl_fd_fb0;
++    }
++    if ((*fb < 0)){  
+ 	    g_print("Unable to open %s %d\n", fb_device, *fb);
+         *fb = 0;
+ 	    retval = FALSE;
+@@ -285,10 +292,17 @@ gboolean mfw_gst_fb0_close(gint *fb)
+ 
+ gboolean mfw_gst_v4l2_localpha_open(MFW_GST_V4LSINK_INFO_T *v4l)
+ {
+-    gchar fb_device2[100] = "/dev/fb2";
+-
+-    if ((v4l->fd_lalpfb =
+-         open(fb_device2, O_RDWR, 0)) < 0) {
++    gchar fb_device2[100] = "/dev/fb1";
++    static gint gbl_fd_fb1 = -1;
++
++    //Only open if the global fd is closed - Add by Dylan
++    if (fcntl(gbl_fd_fb1,F_GETFL) == -1){
++        v4l->fd_lalpfb = open(fb_device2, O_RDWR, 0);
++        gbl_fd_fb1 = v4l->fd_lalpfb;
++    } else {
++        v4l->fd_lalpfb = gbl_fd_fb1;
++    }
++    if (v4l->fd_lalpfb < 0) {   
+         g_print("Unable to open %s %d\n", fb_device2, v4l->fd_lalpfb);
+         v4l->fd_lalpfb = 0;
+         return FALSE;
+diff --git a/src/misc/v4l_sink/src/mfw_gst_v4l.c b/src/misc/v4l_sink/src/mfw_gst_v4l.c
+index f14611f..f5cffea 100755
+--- a/src/misc/v4l_sink/src/mfw_gst_v4l.c
++++ b/src/misc/v4l_sink/src/mfw_gst_v4l.c
+@@ -36,6 +36,7 @@
+ /*=============================================================================
+                             INCLUDE FILES
+ =============================================================================*/
++#include <fcntl.h>
+ #include <errno.h>
+ #include <gst/gst.h>
+ 
+@@ -66,7 +67,7 @@
+ GST_DEBUG_CATEGORY_EXTERN (mfw_gst_v4lsink_debug);
+ #define GST_CAT_DEFAULT mfw_gst_v4lsink_debug
+ 
+-
++static int is_v4l2_closed = 0;    /*added by ShawneeChen*/
+ /*=============================================================================
+                              GLOBAL FUNCTIONS
+ =============================================================================*/
+@@ -603,14 +604,21 @@ gboolean
+ mfw_gst_v4l2_open (MFW_GST_V4LSINK_INFO_T * v4l_info)
+ {
+   gboolean retval = TRUE;
++   static gint gbl_fd_v4ldev = -1;// video17 or video16 - Add by Dylan
+ 
+   /*No need to open v4l device when it has opened--change para on-the-fly */
+     if (v4l_info->v4l_id<0){
+ 
+       if (v4l_info->v4l_dev_name[0]!='\0'){
+-        v4l_info->v4l_id =
++          //Only open for first time or if v4l2 device is closed, means mfw_gst_v4l2_close() is called. by ShawneeChen.
++          if (gbl_fd_v4ldev == -1 || is_v4l2_closed == 1){
++          v4l_info->v4l_id =
+                   open (v4l_info->v4l_dev_name, O_RDWR | O_NONBLOCK, 0);
+-      }else{
++          gbl_fd_v4ldev = v4l_info->v4l_id;//Add by Dylan
++         } else {
++          v4l_info->v4l_id = gbl_fd_v4ldev;//Add by Dylan
++         }
++       }else{
+         v4l_info->v4l_id = mfw_gst_get_first_odev();
+       }
+     }
+@@ -1407,14 +1415,38 @@ mfw_gst_v4l2_set_crop (MFW_GST_V4LSINK_INFO_T * v4l_info,
+   }
+ 
+   if (!(v4l_info->stretch)) {
++    guint num, den;
++    guint video_w, video_h;
++    gst_video_calculate_display_ratio (&num, &den,
++                          v4l_info->width, v4l_info->height,
++                          v4l_info->aspectratio_n, v4l_info->aspectratio_d,
++                          1, 1);
++    if (v4l_info->height % v4l_info->aspectratio_d == 0) {
++      GST_DEBUG ("keeping video height");
++      video_w = gst_util_uint64_scale_int (v4l_info->height, num, den);
++      video_h = v4l_info->height;
++    } else if (v4l_info->width % v4l_info->aspectratio_n == 0) {
++      GST_DEBUG ("keeping video width");
++      video_w = v4l_info->width;
++      video_h = gst_util_uint64_scale_int (v4l_info->width, den, num);
++    } else {
++      GST_DEBUG ("approximating while keeping video height");
++      video_w = gst_util_uint64_scale_int (v4l_info->height, num, den);
++      video_h = v4l_info->height;
++    }
++    GST_DEBUG (stderr, "scaling to %dx%d\n", video_w, video_h);     
+ 
+     if (v4l_info->rotate == IPU_ROTATE_90_LEFT
+         || v4l_info->rotate == IPU_ROTATE_90_RIGHT) {
+-      video_width = v4l_info->height;
+-      video_height = v4l_info->width;
++      //video_width = v4l_info->height;
++      //video_height = v4l_info->width;
++        video_width = video_h;
++        video_height = video_w;
+     } else {
+-      video_width = v4l_info->width;
+-      video_height = v4l_info->height;
++     // video_width = v4l_info->width;
++     // video_height = v4l_info->height;
++        video_width = video_w;
++        video_height = video_h;
+     }
+     if (crop->c.width * video_height > crop->c.height * video_width) {
+       int width = video_width * crop->c.height / video_height;
+@@ -1842,6 +1874,7 @@ mfw_gst_v4l2_close (MFW_GST_V4LSINK_INFO_T * v4l_info)
+     GST_INFO("--> Close v4l2 device");
+     close (v4l_info->v4l_id);
+     v4l_info->v4l_id = -1;
++    is_v4l2_closed = 1;
+   }
+ #if 0                           //defined(_MX51)
+ 
+diff --git a/src/misc/v4l_sink/src/mfw_gst_v4lsink.c b/src/misc/v4l_sink/src/mfw_gst_v4lsink.c
+index 55e4400..1e38fa1 100644
+--- a/src/misc/v4l_sink/src/mfw_gst_v4lsink.c
++++ b/src/misc/v4l_sink/src/mfw_gst_v4lsink.c
+@@ -44,8 +44,7 @@
+ #endif
+ 
+ #include "mfw_gst_v4lsink.h"
+-
+-
++static gboolean colorkey_flag=FALSE;
+ 
+ #if ((defined (_MX6) || defined (_MX37) || defined (_MX51)) && defined (LOC_ALPHA_SUPPORT))
+ #include <linux/mxcfb.h>
+@@ -187,7 +186,6 @@ static MfwV4lFmtMap g_v4lfmt_maps[] = {
+   {NULL},
+ };
+ 
+-static guint mfw_gst_v4lsink_signals[SIGNAL_LAST] = { 0 };
+ 
+ 
+ #define HW_DEINTERLACE
+@@ -211,7 +209,7 @@ static guint mfw_gst_v4lsink_signals[SIGNAL_LAST] = { 0 };
+ =============================================================================*/
+ /* None */
+ GST_DEBUG_CATEGORY (mfw_gst_v4lsink_debug);
+-
++guint mfw_gst_v4lsink_signals[SIGNAL_LAST] = { 0 };
+ /*=============================================================================
+                         LOCAL FUNCTION PROTOTYPES
+ =============================================================================*/
+@@ -400,6 +398,7 @@ mfw_gst_v4lsink_set_xwindow_id (GstXOverlay * overlay, XID xwindow_id)
+     v4l_info->gstXInfo->parent = (void *) v4l_info;
+   }
+ 
++   g_mutex_lock (v4l_info->gstXInfo->x_lock);
+   if (v4l_info->gstXInfo->xcontext == NULL) {
+     v4l_info->gstXInfo->xcontext = mfw_gst_x11_xcontext_get ();
+     if (v4l_info->gstXInfo->xcontext == NULL) {
+@@ -409,7 +408,7 @@ mfw_gst_v4lsink_set_xwindow_id (GstXOverlay * overlay, XID xwindow_id)
+     }
+     mfw_gst_xwindow_create (v4l_info->gstXInfo, xwindow_id);
+   }
+-
++ g_mutex_unlock (v4l_info->gstXInfo->x_lock);
+   /* Enable the x11 capabilities */
+   v4l_info->x11enabled = TRUE;
+ 
+@@ -477,6 +476,8 @@ static void
+ mfw_gst_v4lsink_set_event_handling (GstXOverlay * overlay,
+     gboolean handle_events)
+ {
++if(handle_events)
++{
+   MFW_GST_V4LSINK_INFO_T *v4l_info = MFW_GST_V4LSINK (overlay);
+   GstXInfo *gstXInfo = v4l_info->gstXInfo;
+ 
+@@ -509,6 +510,9 @@ mfw_gst_v4lsink_set_event_handling (GstXOverlay * overlay,
+   g_mutex_unlock (gstXInfo->x_lock);
+ 
+   g_mutex_unlock (v4l_info->flow_lock);
++}
++if(!handle_events)
++  colorkey_flag=TRUE;
+   return;
+ }
+ 
+@@ -858,7 +862,7 @@ mfw_gst_v4lsink_set_property (GObject * object, guint prop_id,
+       break;
+ 
+     case PROP_ALPHA_ENABLE:
+-      mfw_gst_v4lsink_set_alpha_enable (v4l_info, g_value_get_int (value));
++      mfw_gst_v4l2_set_alpha_enable (v4l_info, g_value_get_int (value));
+       break;
+ #endif
+     case PROP_DEVICE_NAME:
+@@ -1034,7 +1038,26 @@ mfw_gst_v4lsink_show_frame (GstBaseSink * basesink, GstBuffer * buf)
+   GSList *searchlist;
+ 
+   guint8 i = 0;
++
+   MFWGstV4LSinkBuffer *v4lsink_buffer = NULL;
++  /* When exit "open file menu" of the video player,will redraw colorkey */
++  if(colorkey_flag)
++   {
++    GstXInfo *gstXInfo = v4l_info->gstXInfo;
++    Display * const dpy = gstXInfo->xcontext->disp;
++    const Window xid = gstXInfo->xwindow->win;
++    GC vo_gc;
++    XLockDisplay (dpy);
++    vo_gc = XCreateGC( dpy ,xid, 0, NULL);
++    XSetForeground( dpy, vo_gc, 0x010203);
++    XFillRectangle( dpy, xid, vo_gc,
++                               0, 0,
++                               v4l_info->disp_width, v4l_info->disp_height);
++    XUnlockDisplay (dpy);
++    colorkey_flag=FALSE;
++
++   }
++
+   /* This is to enable the integration of the peer elements which do not
+      call the gst_pad_alloc_buffer() to allocate their output buffers */
+ 
+@@ -1065,6 +1088,18 @@ mfw_gst_v4lsink_show_frame (GstBaseSink * basesink, GstBuffer * buf)
+     return GST_FLOW_OK;
+   }
+ 
++#if ((defined (_MX6) || defined (_MX37) || defined (_MX51)) && defined (LOC_ALPHA_SUPPORT))
++ if (!v4l_info->gstXInfo->xwindow && v4l_info->alpha_enable != ALPHA_GLOBAL) {
++  v4l_info->fd_lalpfb = 0;
++  v4l_info->alpha_enable = ALPHA_GLOBAL;
++  memset (&v4l_info->lalpha, 0, sizeof (struct mxcfb_loc_alpha));
++  v4l_info->lalp_buf_vaddr[0] = v4l_info->lalp_buf_vaddr[1] = 0;
++  v4l_info->alpha = 255;
++  mfw_gst_v4l2_localpha_open (v4l_info);
++  mfw_gst_v4l2_set_alpha (v4l_info);
++ }
++#endif
++
+   if (v4l_info->stream_on == TRUE || v4l_info->need_check_params == TRUE) {
+     g_mutex_lock (v4l_info->flow_lock);
+ 
+@@ -1493,6 +1528,8 @@ mfw_gst_v4lsink_change_state (GstElement * element, GstStateChange transition)
+       v4l_info->height = -1;
+       v4l_info->in_width = -1;
+       v4l_info->in_height = -1;
++      v4l_info->aspectratio_n = 1;
++      v4l_info->aspectratio_d = 1;
+       v4l_info->framerate_n = 0;
+       v4l_info->framerate_d = 1;
+ 
+@@ -1726,6 +1763,7 @@ mfw_gst_v4lsink_init (MFW_GST_V4LSINK_INFO_T * v4l_info,
+ 
+   v4l_info->colorSrc = 0;
+ 
++#if 0
+ #if ((defined (_MX6) || defined (_MX37) || defined (_MX51)) && defined (LOC_ALPHA_SUPPORT))
+   v4l_info->fd_lalpfb = 0;
+   v4l_info->alpha_enable = ALPHA_GLOBAL;
+@@ -1733,7 +1771,7 @@ mfw_gst_v4lsink_init (MFW_GST_V4LSINK_INFO_T * v4l_info,
+   v4l_info->lalp_buf_vaddr[0] = v4l_info->lalp_buf_vaddr[1] = 0;
+   v4l_info->alpha = 255;
+ #endif
+-
++#endif
+   v4l_info->setXid = FALSE;
+ 
+   memset (&v4l_info->crop, 0, sizeof (struct v4l2_crop));
+@@ -1998,7 +2036,7 @@ mfw_gst_v4lsink_buffer_alloc (GstBaseSink * bsink, guint64 offset,
+ 
+   gboolean result = FALSE;
+ 
+-  gint aspectratio_n = 0, aspectratio_d = 0;
++//  gint aspectratio_n = 0, aspectratio_d = 0;
+   gint bpp, depth;
+ 
+ 
+@@ -2015,8 +2053,10 @@ mfw_gst_v4lsink_buffer_alloc (GstBaseSink * bsink, guint64 offset,
+ 
+     gst_structure_get_int (s, "width", &v4l_info->width);
+     gst_structure_get_int (s, "height", &v4l_info->height);
+-    gst_structure_get_fraction (s, "pixel-aspect-ratio", &aspectratio_n,
+-        &aspectratio_d);
++  //  gst_structure_get_fraction (s, "pixel-aspect-ratio", &aspectratio_n,
++  //      &aspectratio_d);
++     gst_structure_get_fraction (s, "pixel-aspect-ratio", &v4l_info->aspectratio_n,
++        &v4l_info->aspectratio_d);
+     gst_structure_get_int (s, CAPS_FIELD_CROP_LEFT, &v4l_info->cr_left_bypixel);
+     gst_structure_get_int (s, CAPS_FIELD_CROP_TOP, &v4l_info->cr_top_bypixel);
+     gst_structure_get_int (s, CAPS_FIELD_CROP_RIGHT,
+@@ -2048,8 +2088,10 @@ mfw_gst_v4lsink_buffer_alloc (GstBaseSink * bsink, guint64 offset,
+     }
+ 
+ 
+-    GST_DEBUG ("aspectratio_n=%d", aspectratio_n);
+-    GST_DEBUG ("aspectratio_d=%d", aspectratio_d);
++   // GST_DEBUG ("aspectratio_n=%d", aspectratio_n);
++  //  GST_DEBUG ("aspectratio_d=%d", aspectratio_d);
++    GST_DEBUG ("aspectratio_n=%d", v4l_info->aspectratio_n);
++    GST_DEBUG ("aspectratio_d=%d", v4l_info->aspectratio_d);
+     GST_DEBUG ("Decoded Width = %d, Decoded Height = %d",
+         v4l_info->width, v4l_info->height);
+ 
+diff --git a/src/misc/v4l_sink/src/mfw_gst_v4lsink.h b/src/misc/v4l_sink/src/mfw_gst_v4lsink.h
+index d443a79..44425ad 100755
+--- a/src/misc/v4l_sink/src/mfw_gst_v4lsink.h
++++ b/src/misc/v4l_sink/src/mfw_gst_v4lsink.h
+@@ -72,7 +72,7 @@ struct v4l2_mxc_offset
+ #undef LOC_ALPHA_SUPPORT
+ #endif
+ 
+-//#define LOC_ALPHA_SUPPORT
++#define LOC_ALPHA_SUPPORT
+ //#define VL4_STREAM_CALLBACK
+ 
+ #if ((defined (_MX6) || defined (_MX37) || defined (_MX51)) && defined (LOC_ALPHA_SUPPORT))
+@@ -218,6 +218,8 @@ typedef struct MFW_GST_V4LSINK_INFO_S
+   PARAM_SET setpara;
+   gint width;
+   gint height;                  /* the size of the incoming YUV stream */
++  gint aspectratio_n;
++  gint aspectratio_d;
+   gint in_width;
+   gint in_height;
+   gint disp_height;             /* resize display height */
+diff --git a/src/misc/v4l_sink/src/mfw_gst_xlib.c b/src/misc/v4l_sink/src/mfw_gst_xlib.c
+index 9d77a5f..0b0d67f 100755
+--- a/src/misc/v4l_sink/src/mfw_gst_xlib.c
++++ b/src/misc/v4l_sink/src/mfw_gst_xlib.c
+@@ -829,7 +829,6 @@ mfw_gst_xwindow_create (GstXInfo * gstXInfo, XID xwindow_id)
+ 
+     /* We get window geometry, set the event we want to receive,
+        and create a GC */
+-    g_mutex_lock (gstXInfo->x_lock);
+     XGetWindowAttributes (gstXInfo->xcontext->disp, xwindow->win, &attr);
+     xwindow->width = attr.width;
+     xwindow->height = attr.height;
+@@ -849,7 +848,6 @@ mfw_gst_xwindow_create (GstXInfo * gstXInfo, XID xwindow_id)
+ 
+     gstXInfo->xwindow = xwindow;
+ 
+-    g_mutex_unlock (gstXInfo->x_lock);
+ 
+     return;
+ }
+diff --git a/src/misc/v4l_source/src/mfw_gst_v4lsrc.c b/src/misc/v4l_source/src/mfw_gst_v4lsrc.c
+index 2c2e838..4775746 100755
+--- a/src/misc/v4l_source/src/mfw_gst_v4lsrc.c
++++ b/src/misc/v4l_source/src/mfw_gst_v4lsrc.c
+@@ -470,6 +470,7 @@ mfw_gst_v4lsrc_capture_setup (MFWGstV4LSrc * v4l_src)
+   gint fd_v4l = 0;
+   struct v4l2_mxc_offset off;
+   gint in_width = 0, in_height = 0;
++  v4l2_std_id tv_std;
+ 
+   if ((fd_v4l = open (v4l_src->devicename, O_RDWR, 0)) < 0) {
+     GST_ERROR (">>V4L_SRC: Unable to open %s", v4l_src->devicename);
+@@ -480,7 +481,42 @@ mfw_gst_v4lsrc_capture_setup (MFWGstV4LSrc * v4l_src)
+     GST_ERROR ("VIDIOC_DBG_G_CHIP_IDENT failed.");
+   } else
+     GST_INFO ("sensor chip is %s", chip.match.name);
++   
++  input = v4l_src->input;
++  if (ioctl (fd_v4l, VIDIOC_S_INPUT, &input) < 0) {
++    GST_ERROR (">>V4L_SRC: VIDIOC_S_INPUT failed");
++    return -1;
++  }
+ 
++  if(input == 1 || input == 2){
++    GST_INFO (">>V4L_SRC: Detecting TV input standard");
++    if(ioctl(fd_v4l, VIDIOC_G_STD, &tv_std)){
++      GST_ERROR (">>V4L_SRC: VIDIOC_G_STD failed");
++      return -1;
++    }
++    sleep(1);// wait 1s to check again
++    if(ioctl(fd_v4l, VIDIOC_G_STD, &tv_std)){
++      GST_ERROR (">>V4L_SRC: VIDIOC_G_STD failed");
++      return -1;
++    }
++    if(tv_std == V4L2_STD_ALL){
++      GST_INFO(">>V4L_SRC: Changing TV input standard");
++      sleep(1);
++      if(ioctl(fd_v4l, VIDIOC_G_STD, &tv_std)){
++        GST_ERROR (">>V4L_SRC: VIDIOC_G_STD failed");
++        return -1;
++      }
++      if(ioctl(fd_v4l, VIDIOC_S_STD, &tv_std)){
++        GST_ERROR (">>V4L_SRC: VIDIOC_S_STD failed");
++        return -1;
++      }
++    } else {
++      if(ioctl(fd_v4l, VIDIOC_S_STD, &tv_std)){
++        GST_ERROR (">>V4L_SRC: VIDIOC_S_STD failed");
++        return -1;
++      }
++    }
++  }
+ 
+   if (v4l_src->crop_pixel) {
+     in_width = v4l_src->capture_width - (2 * v4l_src->crop_pixel);
+@@ -535,12 +571,14 @@ mfw_gst_v4lsrc_capture_setup (MFWGstV4LSrc * v4l_src)
+   parm.parm.capture.timeperframe.denominator = v4l_src->fps_n;
+   parm.parm.capture.capturemode = v4l_src->capture_mode;
+   if (!(IS_PXP (v4l_src->chipcode))) {
++ /*
+     input = v4l_src->input;
+ 
+     if (ioctl (fd_v4l, VIDIOC_S_INPUT, &input) < 0) {
+       GST_ERROR (">>V4L_SRC: VIDIOC_S_INPUT failed");
+       return -1;
+     }
++ */
+   }
+ 
+   if (ioctl (fd_v4l, VIDIOC_S_PARM, &parm) < 0) {
+diff --git a/src/video/vpu/src/vpuenc.c b/src/video/vpu/src/vpuenc.c
+index 7b604a3..de400fa 100755
+--- a/src/video/vpu/src/vpuenc.c
++++ b/src/video/vpu/src/vpuenc.c
+@@ -39,7 +39,7 @@
+ 
+ 
+ 
+-#define DEFAULT_BITSTREAM_BUFFER_LENGTH (1024*1024)     /* 1M bytes */
++#define DEFAULT_BITSTREAM_BUFFER_LENGTH (1024*1024)*6     /* By Adam: increase the buffer from 1M  to 6M bytes */
+ 
+ #define IS_DMABLE_BUFFER(buffer) ( (GST_IS_BUFFER_META(buffer->_gst_reserved[G_N_ELEMENTS(buffer->_gst_reserved)-1])) \
+                                  || ( GST_IS_BUFFER(buffer) \
+@@ -81,7 +81,7 @@
+ #define Align(ptr,align)	((align) ? ((((guint32)(ptr))+(align)-1)/(align)*(align)) : ((guint32)(ptr)))
+ 
+ #define VPUENC_TS_BUFFER_LENGTH_DEFAULT (1024)
+-#define VPUENC_DEFAULT_BITRARE_KBPS(w,h,fr) ((w)*(h)*3/2*(fr)*8/80/1000)
++#define VPUENC_DEFAULT_BITRARE_KBPS(w,h,fr) ((w)*(h)*3/2*(fr)*8/80/1000)*4  /*By Adam: increase bitrate to improve performance*/
+ 
+ #define ATTACH_MEM2VPUDEC(vpuenc, desc)\
+  do {\

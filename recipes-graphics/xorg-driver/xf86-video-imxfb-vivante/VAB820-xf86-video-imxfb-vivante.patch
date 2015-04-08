@@ -1,0 +1,582 @@
+diff --git a/EXA/src/vivante_fbdev/imx_display.c b/EXA/src/vivante_fbdev/imx_display.c
+index 595c770..773375c 100644
+--- a/EXA/src/vivante_fbdev/imx_display.c
++++ b/EXA/src/vivante_fbdev/imx_display.c
+@@ -45,6 +45,14 @@
+ #endif
+ #endif
+ 
++#define VIA_VIV_DEBUG
++
++#ifdef VIA_VIV_DEBUG
++#define DEBUG(x) x
++#else
++#define DEBUG(x)
++#endif
++
+ typedef VivPtr ImxPtr;
+ typedef VivRec ImxRec;
+ 
+@@ -107,7 +115,7 @@ typedef struct {
+ 	Bool		edidModesAvail;
+ 
+ 	/* Buffer for reading EDID monitor data */
+-	Uchar		edidDataBytes[128];
++	Uchar		edidDataBytes[256];//[128];
+ 
+ 	/* List of modes supported by frame buffer. */
+ 	DisplayModePtr	fbModesList;
+@@ -122,6 +130,66 @@ typedef struct {
+ 
+ #define IMXDISPLAYPTR(imxPtr) ((ImxDisplayPtr)((imxPtr)->displayPrivate))
+ 
++
++static void xfree2fbdev_timing(DisplayModePtr mode, struct fb_var_screeninfo *var)
++{
++	var->xres = mode->HDisplay;
++	var->yres = mode->VDisplay;
++	if (var->xres_virtual < var->xres)
++		var->xres_virtual = var->xres;
++	if (var->yres_virtual < var->yres)
++		var->yres_virtual = var->yres;
++	var->xoffset = var->yoffset = 0;
++	var->pixclock = mode->Clock ? 1000000000/mode->Clock : 0;
++	var->right_margin = mode->HSyncStart-mode->HDisplay;
++	var->hsync_len = mode->HSyncEnd-mode->HSyncStart;
++	var->left_margin = mode->HTotal-mode->HSyncEnd;
++	var->lower_margin = mode->VSyncStart-mode->VDisplay;
++	var->vsync_len = mode->VSyncEnd-mode->VSyncStart;
++	var->upper_margin = mode->VTotal-mode->VSyncEnd;
++	var->sync = 0;
++	if (mode->Flags & V_PHSYNC)
++		var->sync |= FB_SYNC_HOR_HIGH_ACT;
++	if (mode->Flags & V_PVSYNC)
++		var->sync |= FB_SYNC_VERT_HIGH_ACT;
++	if (mode->Flags & V_PCSYNC)
++		var->sync |= FB_SYNC_COMP_HIGH_ACT;
++	if (mode->Flags & V_BCAST)
++		var->sync |= FB_SYNC_BROADCAST;
++	if (mode->Flags & V_INTERLACE)
++		var->vmode = FB_VMODE_INTERLACED;
++	else if (mode->Flags & V_DBLSCAN)
++		var->vmode = FB_VMODE_DOUBLE;
++	else
++		var->vmode = FB_VMODE_NONINTERLACED;
++}
++static Bool __check_std_block(CARD8* pEDIDData)
++{
++    /* EDID Header is 00 FF FF FF FF FF FF 00 */
++
++    if ((pEDIDData[0] == 0) && (pEDIDData[1] == 0xFF) &&
++        (pEDIDData[2] == 0xFF)) {	
++        		return TRUE;
++	}
++    else
++        return FALSE;
++
++}
++
++static Bool __check_ext_block(CARD8* pEDIDData)
++{
++    int     i;
++    int     ret = FALSE;    
++
++    // only check CEA Block currently!	
++    /* 0x02: CEA flag. 0x03: only support version 3 */
++    if (pEDIDData[0] == 0x02 && pEDIDData[1] == 0x03){
++        DEBUG(ErrorF("Found CEA Block\n"));
++        ret = TRUE;
++    }
++    return ret;		
++}
++
+ static void
+ imxDisplayGetPreInitMaxSize(ScrnInfoPtr pScrn, int* pMaxWidth, int* pMaxHeight);
+ static Bool
+@@ -227,8 +295,9 @@ imxDisplayGetFrameBufferType(struct fb_fix_screeninfo* pFixInfo)
+ 
+ static const char* imxSysnodeNameMonitorInfoArray[] =
+ {
+-	"/sys/devices/platform/mxc_ddc.0/",
+-	"/sys/devices/platform/sii902x.0/"
++	//"/sys/devices/platform/mxc_ddc.0/",
++	//"/sys/devices/platform/sii902x.0/"
++	"/sys/devices/soc0/soc.1/20e0000.hdmi_video/"
+ };
+ static const int imxSysnodeNameMonitorInfoCount =
+ 	sizeof(imxSysnodeNameMonitorInfoArray) /
+@@ -1143,6 +1212,78 @@ imxCrtcPrepare(xf86CrtcPtr crtc)
+ 	/* nothing to do */
+ }
+ 
++static void via_imx_crtc_mode_set(xf86CrtcPtr crtc, DisplayModePtr mode, DisplayModePtr adjusted_mode,
++		int x, int y)
++{
++	
++
++	ScrnInfoPtr pScrn = crtc->scrn;
++
++	ImxPtr imxPtr = IMXPTR(pScrn);
++	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
++
++	struct fb_var_screeninfo var;
++	struct fb_fix_screeninfo fix;
++	memset(&var, 0, sizeof(struct fb_var_screeninfo));
++	memset(&fix, 0, sizeof(struct fb_fix_screeninfo));
++
++	
++    int fd = fbdevHWGetFD(pScrn);
++
++
++	if(ioctl(fd, FBIOGET_VSCREENINFO, &var) < 0 )
++	{
++		DEBUG(ErrorF("Unable to get VSCREENINFO!\n"));
++		return;
++	}
++
++	xfree2fbdev_timing(mode, &var);
++	
++	var.xres_virtual = pScrn->displayWidth;
++
++	if (0 != ioctl(fd, FBIOGET_FSCREENINFO, &fix)) {
++		ErrorF("Get fix screen info failed\n");
++		return;
++	}
++	if (fPtr->fbShadowAllocated) {
++
++		/* How many bytes from start of 1st buffer to start */
++		/* of 2nd buffer? */
++		int fbBytesPerPixel = (pScrn->bitsPerPixel + 7) / 8;
++		const int offsetBytes =
++			imxPtr->fbMemoryStart2 - imxPtr->mFB.mFBStart;
++
++		/* What should the yoffset by to start of 2nd buffer? */
++		const int yoffset = offsetBytes / fix.line_length;
++
++		/* What should virtual resolution be adjusted to */
++		/* based on the 2 buffers? */
++		const int vyres = yoffset * 2;
++
++		/* pScrn->displayWidth: not display width in case of rotation. It is desktop width. Use fbFixScreenInfo.line_length */
++		/* to calculate offset */
++		var.xoffset = offsetBytes - yoffset * fix.line_length;
++		var.yoffset = yoffset;
++		var.yres_virtual = vyres;
++
++	/* If the shadow memory is not allocated, then we need to */
++	/* reset any FB pan display back to (0,0). */
++	} else {
++
++		var.xoffset = 0;
++		var.yoffset = 0;
++		var.xres_virtual = pScrn->displayWidth;
++		var.yres_virtual = IMX_ALIGN(var.yres, imxPtr->fbAlignHeight);
++	}
++
++	if ( ioctl(fd, FBIOPUT_VSCREENINFO, &var ) < 0 )
++	{
++		DEBUG(ErrorF("Set mode failed \n"));
++		return;
++	}
++
++	OnCrtcModeChanged(pScrn);
++}
+ static void
+ imxCrtcModeSet(xf86CrtcPtr crtc, DisplayModePtr mode, DisplayModePtr adjMode,
+ 		int x, int y)
+@@ -1338,6 +1479,14 @@ imxOutputRestore(xf86OutputPtr output)
+ }
+ 
+ static int
++via_imx_hdmi_mode_valid(xf86OutputPtr output, DisplayModePtr mode)
++{
++	ScrnInfoPtr pScrn = output->scrn;
++
++	return imxDisplayFrameBufferModeSupport(pScrn, mode);
++}
++
++static int
+ imxOutputModeValid(xf86OutputPtr output, DisplayModePtr mode)
+ {
+ 	/* Access the associated screen info. */
+@@ -1411,16 +1560,62 @@ imxOutputGetModes(xf86OutputPtr output)
+ 	/* Access driver private screen display data */
+ 	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
+ 
+-    if(fPtr->fbModesList) {
+-        return xf86DuplicateModes(pScrn, fPtr->fbModesList);
+-    }
+-
+     DisplayModePtr builtinMode = fbdevHWGetBuildinMode(pScrn);
+     xf86PrintModeline(pScrn->scrnIndex, builtinMode);
+     DisplayModePtr modesList = xf86DuplicateMode(builtinMode);
++	modesList->name = xstrdup("buildin");
++	modesList->type |= M_T_PREFERRED;
++
+     return modesList;
+ }
+ 
++static DisplayModePtr
++via_imx_hdmi_get_modes(xf86OutputPtr output)
++{
++	/* Access the associated screen info. */
++	ScrnInfoPtr pScrn = output->scrn;
++
++	/* Access driver private screen data */
++	ImxPtr imxPtr = IMXPTR(pScrn);
++
++	/* Access driver private screen display data */
++	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
++
++	static Bool getHdmiEdidFlag = FALSE;
++	DisplayModePtr modes = NULL;
++
++	xf86MonPtr pMonitor = 
++		imxDisplayGetEdid(pScrn, imxPtr->fbId, fPtr->edidDataBytes, sizeof(fPtr->edidDataBytes));
++	if(NULL != pMonitor && (fPtr->edidDataBytes[0x14] & 0x80)) {
++		xf86OutputSetEDID(output, pMonitor);
++		xf86PrintEDID(pMonitor);
++		getHdmiEdidFlag = TRUE;
++		ErrorF("Get HDMI EDID successfully\n");
++	} else {
++		ErrorF("Can not get HDMI EDID\n");
++	}
++
++	if(getHdmiEdidFlag) {
++		modes = xf86ModesAdd(modes, xf86OutputGetEDIDModes(output));
++	}
++
++	DisplayModePtr builtinMode = fbdevHWGetBuildinMode(pScrn);
++	xf86PrintModeline(pScrn->scrnIndex, builtinMode);
++	DisplayModePtr modesList = xf86DuplicateMode(builtinMode);
++	modesList->name = xstrdup("buildin");
++	modesList->type |= M_T_PREFERRED;
++	modes = xf86ModesAdd(modes, modesList);
++
++	if(modes)
++		return modes;
++
++
++	if(fPtr->fbModesList) {
++	    return xf86DuplicateModes(pScrn, fPtr->fbModesList);
++	}
++
++}
++
+ static void
+ imxOutputDestroy(xf86OutputPtr output)
+ {
+@@ -1464,6 +1659,85 @@ imxOutputGetProperty(xf86OutputPtr output, Atom property)
+ }
+ 
+ 
++
++#define BUF_SZ 256
++int out_num = 0;
++
++disp_info vab820_disp_info;
++
++void get_disp_info_from_cmdline(void)
++{
++        char buf[BUF_SZ];
++        char *option = NULL, *opt = NULL;
++        char name[] = "mxcfb0";
++	int name_len = strlen(name);
++        char tmp[10];
++	int tmp_len = 0;
++	int i = 0;
++	char *tmp_str = NULL;
++                                                                                                           
++        memset((void *)&vab820_disp_info, 0, sizeof(vab820_disp_info));
++        memset(buf, 0, sizeof(buf));
++		
++        int fd = open("/proc/cmdline", O_RDONLY);
++
++        if(fd == -1)
++                return;
++
++        while(read(fd, buf, sizeof(buf)) > 0) {
++		for(i=0; i<2; i++) {
++		DEBUG(ErrorF("Get disp info from cmdline, name: %s\n", name));
++                option = strstr(buf, name);
++                if(!option) {
++			DEBUG(ErrorF("option for %s is NULL\n", name));
++                	name[5] += 1;
++                        continue;
++                }
++                if(!strncmp(option, name, name_len) && option[name_len] == ':')
++                        option = option + name_len + 1;
++		tmp_str = strdup(option);
++                opt = strsep(&tmp_str, ",");
++
++		if(!opt) {
++			ErrorF("opt is NULL\n");
++		}
++                if(!strncmp(opt, "dev=", 4)) {
++			DEBUG(ErrorF("Get disp info from cmdline, 'dev=' found\n"));
++			out_num++;//record the number of the output;
++                        memcpy(tmp, opt+4, strlen(opt)-4);
++                        tmp_len = strlen(opt) - 4;
++			DEBUG(ErrorF("Get disp info from cmdline, tmp: %s\n", tmp));
++                        if(!strncmp(tmp, "hdmi", tmp_len) && !strstr(option, "hdmi=off")) {
++                            vab820_disp_info.output[i].output_name = HDMI;
++				vab820_disp_info.output[i].usage = 1;
++				DEBUG(ErrorF("Get disp info from cmdline: HDMI: %d\n",i));
++                		}else if(!strncmp(tmp, "ldb", tmp_len)){
++					DEBUG(ErrorF("Get disp info from cmdline: LVDS: %d\n",i));
++					vab820_disp_info.output[i].output_name = LVDS;
++					vab820_disp_info.output[i].usage = 1;
++							
++                 		} else if(!strncmp(tmp, "vga", tmp_len) && !strstr(option, "vga=off")) {
++                        	vab820_disp_info.output[i].output_name = VGA;
++					vab820_disp_info.output[i].usage = 1;
++					DEBUG(ErrorF("Get disp info from cmdline: vga\n"));
++                 		} else if(!strncmp(tmp, "lcd", tmp_len) && !strstr(option, "lcd=off")) {
++                        	vab820_disp_info.output[i].output_name = LCD;
++					vab820_disp_info.output[i].usage = 1;
++					DEBUG(ErrorF("Get disp info from cmdline: lcd\n"));
++                 		} else {
++                 			vab820_disp_info.output[i].usage = 0;
++					out_num = out_num -1;//record the number of the output;
++                			name[5] += 1;
++					free(tmp_str);
++					tmp_str = NULL;
++                        		continue;
++				}
++                }
++                name[5] += 1;
++            }
++        }
++}
++
+ /* -------------------------------------------------------------------- */
+ 
+ static void
+@@ -1485,14 +1759,123 @@ imxDisplayGetPreInitMaxSize(ScrnInfoPtr pScrn, int* pMaxWidth, int* pMaxHeight)
+ 		*pMaxHeight = fPtr->fbMaxHeight;
+ 	}
+ }
++/*********************************************/
++static const xf86CrtcFuncsRec via_imx_crtc_funcs = {
++	.dpms = imxCrtcDPMS,
++	.save = imxCrtcSave,
++	.restore = imxCrtcRestore,
++	.lock = imxCrtcLock,
++	.unlock = imxCrtcUnlock,
++	.mode_fixup = imxCrtcModeFixup,
++	.prepare = imxCrtcPrepare,
++	.mode_set = via_imx_crtc_mode_set,//imxCrtcModeSet,
++	.commit = imxCrtcCommit,
++//	.gamma_set = imxCrtcGammaSet;
++	.shadow_allocate = imxCrtcShadowAllocate,
++	.shadow_create = imxCrtcShadowCreate,
++	.shadow_destroy = imxCrtcShadowDestroy,
++	.destroy = imxCrtcDestroy,
++};
++Bool via_imx_crtc_init(ScrnInfoPtr pScrn)
++{
++	VivPtr vPtr = GET_VIV_PTR(pScrn);
++	ImxPtr imxPtr = vPtr;
++	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
++	fPtr->imxCrtcFuncs = via_imx_crtc_funcs;
++
++	/* Allocate and initialize CRTC */
++	fPtr->crtcPtr = xf86CrtcCreate(pScrn, &via_imx_crtc_funcs);
++	if (NULL == fPtr->crtcPtr) {
++
++		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
++				"xf86CrtcCreate failed\n");
++		return FALSE;
++	}
++	return TRUE;
++}
++
++static const xf86OutputFuncsRec via_imx_lvds_output_funcs = {
++	//.create_resources = imxOutputCreateResources,
++	.dpms = imxOutputDPMS,
++	.save = imxOutputSave,
++	.restore = imxOutputRestore,
++	.mode_valid = imxOutputModeValid,
++	.mode_fixup = imxOutputModeFixup,
++	.prepare = imxOutputPrepare,
++	.mode_set = imxOutputModeSet,
++	.commit = imxOutputCommit,
++	.detect = imxOutputDetect,
++	.get_modes = imxOutputGetModes,
++#ifdef RANDR_13_INTERFACE
++	.get_property = imxOutputGetProperty,
++#endif
++	.destroy = imxOutputDestroy,
++};
++
++Bool via_imx_lvds_output_init(ScrnInfoPtr pScrn)
++{
++	VivPtr vPtr = GET_VIV_PTR(pScrn);
++	ImxPtr imxPtr = vPtr;
++	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
++	fPtr->imxOutputFuncs = via_imx_lvds_output_funcs;
++
++	fPtr->outputPtr =
++		xf86OutputCreate(pScrn, &fPtr->imxOutputFuncs, OUTPUT_LVDS_NAME);
++	if (NULL == fPtr->outputPtr) {
++
++		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
++				"xf86OutputCreate failed\n");
++		return FALSE;
++	}
++	fPtr->outputPtr->possible_crtcs = 1;
++	return TRUE;
++}
++
++static const xf86OutputFuncsRec via_imx_hdmi_output_funcs = {
++	.create_resources = imxOutputCreateResources,
++	.dpms = imxOutputDPMS,
++	.save = imxOutputSave,
++	.restore = imxOutputRestore,
++	.mode_valid = via_imx_hdmi_mode_valid, //imxOutputModeValid,
++	.mode_fixup = imxOutputModeFixup,
++	.prepare = imxOutputPrepare,
++	.mode_set = imxOutputModeSet,
++	.commit = imxOutputCommit,
++	.detect = imxOutputDetect,
++	.get_modes = via_imx_hdmi_get_modes, 
++#ifdef RANDR_13_INTERFACE
++	.get_property = imxOutputGetProperty,
++#endif
++	.destroy = imxOutputDestroy,
++};
++
++Bool via_imx_hdmi_output_init(ScrnInfoPtr pScrn)
++{
++	VivPtr vPtr = GET_VIV_PTR(pScrn);
++	ImxPtr imxPtr = vPtr;
++	ImxDisplayPtr fPtr = IMXDISPLAYPTR(imxPtr);
++	fPtr->imxOutputFuncs = via_imx_hdmi_output_funcs;
+ 
++	fPtr->outputPtr =
++		xf86OutputCreate(pScrn, &fPtr->imxOutputFuncs, OUTPUT_HDMI_NAME);
++	if (NULL == fPtr->outputPtr) {
++
++		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
++				"xf86OutputCreate failed\n");
++		return FALSE;
++	}
++	fPtr->outputPtr->possible_crtcs = 1;
++	return TRUE;
++}
++/*********************************************/
+ Bool
+ imxDisplayPreInit(ScrnInfoPtr pScrn)
+ {
+     VivPtr vPtr = GET_VIV_PTR(pScrn);
+     int fd = fbdevHWGetFD(pScrn);
+     ImxPtr imxPtr = vPtr;
+-
++    
++    get_disp_info_from_cmdline();
+     /*****************************************************************/
+     /* retrieve fb id */
+     /*****************************************************************/
+@@ -1589,58 +1972,26 @@ imxDisplayPreInit(ScrnInfoPtr pScrn)
+ 		8192,
+ 		8192);
+ 
+-	/* Establish CRTC callbacks */
+-	fPtr->imxCrtcFuncs.dpms = imxCrtcDPMS;
+-	fPtr->imxCrtcFuncs.save = imxCrtcSave;
+-	fPtr->imxCrtcFuncs.restore = imxCrtcRestore;
+-	fPtr->imxCrtcFuncs.lock = imxCrtcLock;
+-	fPtr->imxCrtcFuncs.unlock = imxCrtcUnlock;
+-	fPtr->imxCrtcFuncs.mode_fixup = imxCrtcModeFixup;
+-	fPtr->imxCrtcFuncs.prepare = imxCrtcPrepare;
+-	fPtr->imxCrtcFuncs.mode_set = imxCrtcModeSet;
+-	fPtr->imxCrtcFuncs.commit = imxCrtcCommit;
+-//	fPtr->imxCrtcFuncs.gamma_set = imxCrtcGammaSet;
+-	fPtr->imxCrtcFuncs.shadow_allocate = imxCrtcShadowAllocate;
+-	fPtr->imxCrtcFuncs.shadow_create = imxCrtcShadowCreate;
+-	fPtr->imxCrtcFuncs.shadow_destroy = imxCrtcShadowDestroy;
+-	fPtr->imxCrtcFuncs.destroy = imxCrtcDestroy;
+-
+-	/* Allocate and initialize CRTC */
+-	fPtr->crtcPtr = xf86CrtcCreate(pScrn, &fPtr->imxCrtcFuncs);
+-	if (NULL == fPtr->crtcPtr) {
+-
+-		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
+-				"xf86CrtcCreate failed\n");
++	Bool ret;
++	ret = via_imx_crtc_init(pScrn);
++	if(!ret) {
++		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "xf86CrtcCreate failed\n");
+ 		return FALSE;
+ 	}
+-
+-	/* Establish output callbacks. */
+-	fPtr->imxOutputFuncs.create_resources = imxOutputCreateResources;
+-	fPtr->imxOutputFuncs.dpms = imxOutputDPMS;
+-	fPtr->imxOutputFuncs.save = imxOutputSave;
+-	fPtr->imxOutputFuncs.restore = imxOutputRestore;
+-	fPtr->imxOutputFuncs.mode_valid = imxOutputModeValid;
+-	fPtr->imxOutputFuncs.mode_fixup = imxOutputModeFixup;
+-	fPtr->imxOutputFuncs.prepare = imxOutputPrepare;
+-	fPtr->imxOutputFuncs.mode_set = imxOutputModeSet;
+-	fPtr->imxOutputFuncs.commit = imxOutputCommit;
+-	fPtr->imxOutputFuncs.detect = imxOutputDetect;
+-	fPtr->imxOutputFuncs.get_modes = imxOutputGetModes;
+-#ifdef RANDR_13_INTERFACE
+-	fPtr->imxOutputFuncs.get_property = imxOutputGetProperty;
+-#endif
+-	fPtr->imxOutputFuncs.destroy = imxOutputDestroy;
+-
+-	/* Allocate and initialize output */
+-	fPtr->outputPtr =
+-		xf86OutputCreate(pScrn, &fPtr->imxOutputFuncs, imxPtr->fbId);
+-	if (NULL == fPtr->outputPtr) {
+-
++	/*if hdmi, call hdmi_init; if lvds, call lvds_init*/
++	/*via_imx_lvds_output_init(pScrn);*/
++	if(vab820_disp_info.output[0].output_name == HDMI) {
++		ErrorF("The output is HDMI. Call via_imx_hdmi_output_init.\n");
++		ret = via_imx_hdmi_output_init(pScrn);
++	} else if (vab820_disp_info.output[0].output_name == LVDS) {
++		ErrorF("The output is LVDS. Call via_imx_lvds_output_init.\n");
++		ret = via_imx_lvds_output_init(pScrn);
++	}
++	if(!ret) {
+ 		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
+ 				"xf86OutputCreate failed\n");
+ 		return FALSE;
+ 	}
+-	fPtr->outputPtr->possible_crtcs = 1;
+ 
+ 	/* Compute initial configuration */
+ 	const Bool bCanGrow = TRUE;
+diff --git a/EXA/src/vivante_fbdev/imx_display.h b/EXA/src/vivante_fbdev/imx_display.h
+index e24efaf..71cedb4 100644
+--- a/EXA/src/vivante_fbdev/imx_display.h
++++ b/EXA/src/vivante_fbdev/imx_display.h
+@@ -37,6 +37,25 @@ typedef enum {
+ 	ImxFbTypeEPDC		= 3
+ } ImxFbType;
+ 
++typedef enum {
++        HDMI,
++        LVDS,
++        VGA,
++        LCD
++}via_output;
++
++#define OUTPUT_HDMI_NAME "HDMI"
++#define OUTPUT_LVDS_NAME "LVDS"
++
++
++typedef struct {
++        int usage; //0: not in use; 1: in use
++        via_output output_name;
++}output_info, p_output_info;
++
++typedef struct {
++        output_info output[2];
++}disp_info, p_disp_info;
+ /* -------------------------------------------------------------------- */
+ 
+ extern Bool
