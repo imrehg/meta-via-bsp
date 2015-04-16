@@ -29,7 +29,7 @@ usage()
     echo -e "\nUsage: source $PROGNAME <build-dir>
     <build-dir>: required option; specifies build directory location
 
-By default the script will setup MACHINE to be imx6qsabresd.
+By default the script will setup MACHINE to be imx6qvab820.
 
 Supported machines: `ls sources/*/conf/machine/*.conf \
 | sed s/\.conf//g | sed -r 's/^.+\///' | xargs echo`
@@ -80,7 +80,7 @@ if [ "$(whoami)" = "root" ]; then
 fi
 
 if [ -z "$MACHINE" ]; then
-    MACHINE='imx6qsabresd'
+    MACHINE='imx6qvab820'
 fi
 
 # Check the machine type specified
