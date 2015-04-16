@@ -210,7 +210,7 @@ fi
 
 cat <<EOF
 
-Welcome to Freescale Community BSP
+Welcome to VIA VAB-820/AMOS-820 BSP
 
 The Yocto Project has extensive documentation about OE including a
 reference manual which can be found at:
@@ -222,6 +222,7 @@ For more information about OpenEmbedded see their website:
 You can now run 'bitbake <target>'
 
 Common targets are:
+    via-image-x11
     core-image-minimal
     meta-toolchain
     meta-toolchain-sdk
