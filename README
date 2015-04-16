@@ -1,5 +1,5 @@
 This README file contains information on the contents of the
-vab820 layer.
+via-vab820-bsp layer.
 
 Please see the corresponding sections below for details.
 
@@ -14,33 +14,38 @@ This layer depends on:
 
   URI: git://git.openembedded.org/openembedded-core
   layers: meta
-  branch: master
+  branch: dora
 
-  URI: git://git.yoctoproject.org/xxxx
-  layers: xxxx
-  branch: master
+  URI: git://git.openembedded.org/meta-openembedded
+  branch: dora
 
+  URI: git://git.yoctoproject.org/meta-fsl-arm
+  branch: dora
 
-Patches
-=======
+  URI: git://github.com/Freescale/fsl-community-bsp-base
+  branch: dora
 
-Please submit any patches against the vab820 layer to the
-xxxx mailing list (xxxx@zzzz.org) and cc: the maintainer:
+  URI: git://git.yoctoproject.org/meta-fsl-arm-extra
+  branch: dora
 
-Maintainer: XXX YYYYYY <xxx.yyyyyy@zzzzz.com>
+  URI: git://git.yoctoproject.org/meta-fsl-demos
+  branch: dora
+
+  URI: git://git.freescale.com/imx/meta-fsl-bsp-release
+  branch: dora_3.10.17-1.0.0_GA
+
+  URI: git://github.com/OSSystems/meta-browser
+  branch: dora
 
 
 Table of Contents
 =================
 
   I. Adding the vab820 layer to your build
- II. Misc
 
 
 I. Adding the vab820 layer to your build
 =================================================
-
---- replace with specific instructions for the vab820 layer ---
 
 In order to use this layer, you need to make the build system aware of
 it.
@@ -56,9 +61,3 @@ other layers needed. e.g.:
     /path/to/yocto/meta-yocto-bsp \
     /path/to/yocto/meta-vab820 \
     "
-
-
-II. Misc
-========
-
---- replace with specific information about the vab820 layer ---
