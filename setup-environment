@@ -21,6 +21,8 @@
 #
 # Add options for the script
 # Copyright (C) 2013 Freescale Semiconductor, Inc.
+# Modifications
+# Copyright (C) 2015 VIA Technologies, Inc.
 
 NCPU=`grep -c processor /proc/cpuinfo`
 CWD=`pwd`
