@@ -42,6 +42,7 @@ Table of Contents
 =================
 
   I. Adding the vab820 layer to your build
+  II. Building the official BSP
 
 
 I. Adding the vab820 layer to your build
@@ -59,5 +60,17 @@ other layers needed. e.g.:
     /path/to/yocto/meta \
     /path/to/yocto/meta-yocto \
     /path/to/yocto/meta-yocto-bsp \
-    /path/to/yocto/meta-vab820 \
+    /path/to/yocto/meta-via-vab820-bsp \
     "
+
+II. Building the official BSP
+=================================================
+
+To easily build the official BSP (`via-image-x11`) without much
+manual setup, need to utilize the platform image from here:
+
+  URI: https://github.com/viaembedded/via-vab820-bsp-platform
+  branch: dora
+
+Build instructions, including pulling the appropriate repositories
+is provided in the README there.
