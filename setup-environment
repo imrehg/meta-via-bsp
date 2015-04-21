@@ -162,6 +162,7 @@ EOF
         -i conf/local.conf
 
     cp $TEMPLATES/* conf/
+    grep -v '^#\|^$' conf/bblayers.conf.sample > conf/bblayers.conf
 
     for s in $HOME/.oe $HOME/.yocto; do
         if [ -e $s/site.conf ]; then
