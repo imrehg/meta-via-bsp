@@ -27,6 +27,7 @@
 NCPU=`grep -c processor /proc/cpuinfo`
 CWD=`pwd`
 PROGNAME="setup-environment"
+META=meta-via-vab820-bsp
 
 usage()
 {
@@ -113,9 +114,9 @@ if [ -e sources/oe-core ]; then
     OEROOT=sources/oe-core
 fi
 
-# Ensure all files in sources/base are kept in sync with project root
+# Ensure all files in sources/$META are kept in sync with project root
 updated=
-for f in $CWD/sources/meta-via-vab820-bsp/*; do
+for f in $CWD/sources/$META/*; do
     file="$(basename $f)"
     if [ ! -f $file ] || [ "$file" = "conf" ] || echo $file | grep -q '~$'; then
         continue
@@ -145,7 +146,7 @@ if [ ! -e conf/local.conf.sample ]; then
     mv conf/local.conf conf/local.conf.sample
 
     # Generate the local.conf based on the Yocto defaults
-    TEMPLATES=$CWD/sources/base/conf 
+    TEMPLATES=$CWD/sources/$META/conf
     grep -v '^#\|^$' conf/local.conf.sample > conf/local.conf
     cat >> conf/local.conf <<EOF
 
