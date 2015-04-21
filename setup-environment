@@ -147,7 +147,7 @@ if [ ! -e conf/local.conf.sample ]; then
 
     # Generate the local.conf based on the Yocto defaults
     TEMPLATES=$CWD/sources/$META/conf
-    grep -v '^#\|^$' conf/local.conf.sample > conf/local.conf
+    grep -v '^#\|^$' $TEMPLATES/local.conf.sample > conf/local.conf
     cat >> conf/local.conf <<EOF
 
 BB_NUMBER_THREADS = '$NCPU'
